@@ -1,5 +1,5 @@
 import { WebPCodec } from '@playcanvas/splat-transform';
-import { Color, createGraphicsDevice } from 'playcanvas';
+import { Color, createGraphicsDevice, Vec3 } from 'playcanvas';
 
 import { registerCameraPosesEvents } from './camera-poses';
 import { registerDocEvents } from './doc';
@@ -73,6 +73,44 @@ const getURLArgs = () => {
     return config;
 };
 
+type CameraJson = {
+    width: number,
+    height: number,
+    position: number[],
+    rotation: number[][],
+    fx?: number,
+    fy?: number
+};
+
+const focalToFovDegrees = (focal: number, pixels: number) => {
+    return 2 * Math.atan(pixels / (2 * focal)) * 180 / Math.PI;
+};
+
+const applyFirstCameraFromURL = async (cameraUrl: string, scene: Scene, lockCamera = false) => {
+    const response = await fetch(cameraUrl);
+    if (!response.ok) {
+        throw new Error(`failed to load camera preset ${cameraUrl}: ${response.status}`);
+    }
+
+    const cameras = await response.json() as CameraJson[];
+    if (!Array.isArray(cameras) || cameras.length === 0) {
+        throw new Error(`camera preset ${cameraUrl} is empty`);
+    }
+
+    const camera = cameras[0];
+    const position = new Vec3(-camera.position[0], -camera.position[1], camera.position[2]);
+
+    // SuperSplat imports generic PLY splats with a 180 degree Z rotation.
+    // Apply the same transform to the camera basis used by WebSplatter.
+    const forward = new Vec3(-camera.rotation[0][2], -camera.rotation[1][2], camera.rotation[2][2]).normalize();
+    const up = new Vec3(camera.rotation[0][1], camera.rotation[1][1], -camera.rotation[2][1]).normalize();
+    const target = position.clone().add(forward);
+    const fovX = camera.fx ? focalToFovDegrees(camera.fx, camera.width) : undefined;
+    const fovY = camera.fy ? focalToFovDegrees(camera.fy, camera.height) : 45;
+
+    scene.camera.setExternalPose(position, target, up, fovX, fovY, lockCamera);
+};
+
 const main = async () => {
     // root events object
     const events = new Events();
@@ -109,15 +147,23 @@ const main = async () => {
     // editor ui
     const editorUI = new EditorUI(events);
 
-    // create the graphics device
-    const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
+    const urlParams = new URLSearchParams(window.location.search);
+    const preserveDrawingBuffer =
+        urlParams.get('preserve_drawing_buffer') === '1' ||
+        urlParams.get('capture') === '1';
+
+    const graphicsDeviceOptions: any = {
         deviceTypes: ['webgl2'],
         antialias: false,
         depth: false,
         stencil: false,
         xrCompatible: false,
+        preserveDrawingBuffer,
         powerPreference: 'high-performance'
-    });
+    };
+
+    // create the graphics device
+    const graphicsDevice = await createGraphicsDevice(editorUI.canvas, graphicsDeviceOptions);
 
     const overrides = [
         getURLArgs()
@@ -264,6 +310,14 @@ const main = async () => {
         }]);
     }
 
+    const cameraUrl = url.searchParams.get('camera_url');
+    if (cameraUrl) {
+        await applyFirstCameraFromURL(
+            decodeURIComponent(cameraUrl),
+            scene,
+            url.searchParams.get('lock_camera') === '1'
+        );
+    }
 
     // handle OS-based file association in PWA mode
     if ('launchQueue' in window) {

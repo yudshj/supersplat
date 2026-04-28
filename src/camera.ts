@@ -104,6 +104,15 @@ class Camera extends Element {
     // overridden target size
     targetSizeOverride: { width: number, height: number } = null;
 
+    externalPose: {
+        position: Vec3,
+        target: Vec3,
+        up: Vec3,
+        fovX?: number,
+        fovY?: number
+    } | null = null;
+    externalPoseLocked = false;
+
     renderOverlays = true;
 
     updateCameraUniforms: () => void;
@@ -272,6 +281,49 @@ class Camera extends Element {
         this.setFocalPoint(target, dampingFactorFactor);
         this.setAzimElev(azim, elev, dampingFactorFactor);
         this.setDistance(l / this.sceneRadius * this.fovFactor, dampingFactorFactor);
+    }
+
+    setExactProjection(fovX?: number, fovY?: number) {
+        if (fovX !== undefined && fovY !== undefined) {
+            this.camera.calculateProjection = (matrix: Mat4) => {
+                const near = this.near;
+                const top = Math.tan(fovY * math.DEG_TO_RAD * 0.5) * near;
+                const right = Math.tan(fovX * math.DEG_TO_RAD * 0.5) * near;
+                matrix.setFrustum(-right, right, -top, top, near, this.far);
+            };
+            this.fov = Math.max(fovX, fovY);
+        } else {
+            this.camera.calculateProjection = null;
+            if (fovY !== undefined) {
+                this.fov = fovY;
+            }
+        }
+    }
+
+    setExternalPose(position: Vec3, target: Vec3, up: Vec3, fovX?: number, fovY?: number, lockCamera = false) {
+        this.ortho = false;
+        this.setExactProjection(fovX, fovY);
+        this.externalPoseLocked = lockCamera;
+
+        this.externalPose = {
+            position: position.clone(),
+            target: target.clone(),
+            up: up.clone(),
+            fovX,
+            fovY
+        };
+
+        this.setPose(position, target, 0);
+        this.onUpdate(0);
+    }
+
+    releaseExternalPose() {
+        if (this.externalPose && !this.externalPoseLocked) {
+            const { position, target } = this.externalPose;
+            this.externalPose = null;
+            this.setPose(position, target, 0);
+            this.onUpdate(0);
+        }
     }
 
     // transform the world space coordinate to normalized screen coordinate
@@ -564,6 +616,27 @@ class Camera extends Element {
     }
 
     onUpdate(deltaTime: number) {
+        if (this.externalPose) {
+            const { position, target, up, fovX, fovY } = this.externalPose;
+            const { targetSize } = this;
+
+            if (fovX !== undefined && fovY !== undefined) {
+                this.camera.horizontalFov = targetSize.width > targetSize.height;
+                this.fov = this.camera.horizontalFov ? fovX : fovY;
+            } else if (fovY !== undefined) {
+                this.camera.horizontalFov = targetSize.width > targetSize.height;
+                this.fov = this.camera.horizontalFov ?
+                    2 * Math.atan((targetSize.width / targetSize.height) * Math.tan(fovY * math.DEG_TO_RAD * 0.5)) * math.RAD_TO_DEG :
+                    fovY;
+            }
+
+            this.mainCamera.setLocalPosition(position);
+            this.mainCamera.lookAt(target, up);
+            this.fitClippingPlanes(this.mainCamera.getLocalPosition(), this.mainCamera.forward);
+            this.camera.camera._updateViewProjMat();
+            return;
+        }
+
         // controller update
         this.controller.update(deltaTime);
 

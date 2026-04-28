@@ -59,6 +59,8 @@ class PointerController {
         let midx: number, midy: number, midlen: number;
 
         const pointerdown = (event: PointerEvent) => {
+            camera.releaseExternalPose();
+
             if (event.pointerType === 'mouse') {
                 // If a button is already pressed, ignore this press
                 if (pressedButton !== -1) {
